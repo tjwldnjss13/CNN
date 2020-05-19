@@ -21,19 +21,27 @@ def train():
     pass
 
 
-def cost_function(target, output):
-    return np.sum(-target * np.log(output) - (1 - target) * np.log(1 - output)) / len(target)
+def bit_l2_cost_function(target, output):
+    return .5 * np.square(target - output)
+
+
+def l2_cost_function(target, output):
+    return np.mean(bit_l2_cost_function(target, output))
 
 
 def bit_cost_function(target, output):
     return -target * np.log(output) - (1 - target) * np.log(1 - output)
 
 
+def cost_function(target, output):
+    return np.mean(bit_cost_function(target, output))
+
+
 def sigmoid(x):
-    return 1 / (1 + np.exp(x))
+    return 1 / (1 + np.exp(-x))
 
 
-def sigmoid_dif(x):
+def sigmoid_derv(x):
     return sigmoid(x) * (1 - sigmoid(x))
 
 
@@ -41,7 +49,7 @@ def leaky_relu(x):
     return np.maximum(.01 * x, x)
 
 
-def leaky_relu_dif(x):
+def leaky_relu_derv(x):
     if x > 0:
         return 1
     else:
@@ -52,8 +60,8 @@ def relu(x):
     return np.maximum(0, x)
 
 
-def relu_dif(x):
-    if x > 0:
+def relu_derv(x):
+    if x is 0:
         return 1
     else:
         return 0
@@ -82,7 +90,7 @@ LABELS = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 # Preprocessing image data
 train_images = []
 train_labels = []
-data_path = '../digit data'
+data_path = './digit data'
 
 for n in range(10):
     for label in range(10):
@@ -97,21 +105,31 @@ for n in range(10):
 train_images = np.array(train_images)
 train_labels = np.array(train_labels)
 
+labels_one_hot = []
+for i in range(len(train_labels)):
+    arr = np.zeros(10)
+    arr[train_labels[i]] = 1
+    labels_one_hot.append(arr)
+
+train_labels = np.array(labels_one_hot)
 
 # Define parameters
-LR = .05
-epochs = 50
+LR = .005
+LR_b = .1
+epochs = 5000
 
-W_ItoH1 = np.random.uniform(-.01, .01, (3, 3))
-W_H1toH2 = np.random.uniform(-.01, .01, (5, 5))
-W_H2toO = np.random.uniform(-.01, .01, (16, 10))
+W_ItoH1 = 2 * np.random.random((3, 3)) - 1
+W_H1toH2 = 2 * np.random.random((5, 5)) - 1
+W_H2toO = 2 * np.random.random((16, 10)) - 1
 
-activation = leaky_relu
-activation_dif = leaky_relu_dif
+b_H1 = 2 * np.random.random((8, 8)) - 1
+b_H2 = 2 * np.random.random((4, 4)) - 1
+b_O = 2 * np.random.random(10) - 1
 
 # Train
 for epoch in range(epochs):
-    print('[{:2d} / {} epoch]'.format(epoch+1, epochs), end='    ')
+    print('[{:3d}/{} epoch]'.format(epoch+1, epochs), end='    ')
+    epoch_acc = 0
     epoch_loss = 0
     for data in range(100):
         image = train_images[data]
@@ -122,29 +140,33 @@ for epoch in range(epochs):
         for i in range(8):
             for j in range(8):
                 pre_H1[i, j] = np.sum(image[2*i:2*i+3, 2*j:2*j+3] * W_ItoH1)
-        post_H1 = activation(pre_H1)
+        post_H1 = relu(pre_H1) + b_H1
 
         pre_H2 = np.zeros((4, 4))
         for i in range(4):
             for j in range(4):
                 pre_H2[i, j] = np.sum(post_H1[i:i+5, j:j+5] * W_H1toH2)
-        post_H2 = activation(pre_H2)
+        post_H2 = relu(pre_H2) + b_H2
 
         post_H2_flat = np.reshape(post_H2, 16)
         pre_O = np.zeros(10)
         for i in range(10):
             pre_O[i] = np.sum(post_H2_flat * W_H2toO[:, i])
-        post_O = sigmoid(pre_O)
+        post_O = sigmoid(pre_O) + b_O
 
-        ce = bit_cost_function(LABELS[label], post_O)
-        ce_loss = cost_function(LABELS[label], post_O)
-        epoch_loss += ce_loss
+        loss = bit_l2_cost_function(label, post_O)
+        if np.argmax(loss) == np.argmax(label):
+            epoch_acc += 1
+
+        epoch_loss += l2_cost_function(label, post_O)
 
         # Backpropagate
-        D_post_O = -.5 * (LABELS[label] / post_O - (1 - LABELS[label]) / (1 - post_O))
+        D_post_O = -(label - post_O)
         D_pre_O = np.zeros(10)
         for i in range(10):
-            D_pre_O[i] = D_post_O[i] * sigmoid_dif(pre_O[i])
+            D_pre_O[i] = D_post_O[i] * sigmoid_derv(pre_O[i])
+
+        b_O -= LR_b * D_post_O
 
         W_H2toO_old = W_H2toO
         for i in range(16):
@@ -159,7 +181,9 @@ for epoch in range(epochs):
         D_pre_H2 = np.zeros((4, 4))
         for i in range(4):
             for j in range(4):
-                D_pre_H2[i, j] = D_post_H2[i, j] * activation_dif(pre_H2[i, j])
+                D_pre_H2[i, j] = D_post_H2[i, j] * relu_derv(pre_H2[i, j])
+
+        b_H2 -= LR_b * D_post_H2
 
         W_H1toH2_old = W_H1toH2
         for i in range(5):
@@ -177,14 +201,16 @@ for epoch in range(epochs):
         for i in range(8):
             for j in range(8):
                 D_post_H1[i, j] = np.sum(D_pre_H2_padded[i:i+5, j:j+5] * W_H1toH2_old_inv)
-                D_pre_H1[i, j] = D_post_H1[i, j] * activation_dif(pre_H1[i, j])
+                D_pre_H1[i, j] = D_post_H1[i, j] * relu_derv(pre_H1[i, j])
+
+        b_H1 -= LR_b * D_post_H1
 
         for i in range(3):
             for j in range(3):
                 W_ItoH1[i, j] -= LR * np.sum(image[i:i+15:2, j:j+15:2] * D_pre_H1)
 
     epoch_loss /= 100
-    print('Loss: {}'.format(epoch_loss))
+    print('Accuracy : {}%, Loss: {}'.format(epoch_acc, epoch_loss))
 
 
 # Test
@@ -195,18 +221,18 @@ pre_H1 = np.zeros((8, 8))
 for i in range(8):
     for j in range(8):
         pre_H1[i, j] = np.sum(test_image[2*i:2*i+3, 2*j:2*j+3] * W_ItoH1)
-post_H1 = activation(pre_H1)
+post_H1 = leaky_relu(pre_H1)
 
 pre_H2 = np.zeros((4, 4))
 for i in range(4):
     for j in range(4):
         pre_H2[i, j] = np.sum(post_H1[i:i+5, j:j+5] * W_H1toH2)
-post_H2 = activation(pre_H2)
+post_H2 = leaky_relu(pre_H2)
 
 post_H2_flat = np.reshape(post_H2, 16)
 pre_O = np.zeros(10)
 post_O = pre_O
 for i in range(10):
     pre_O[i] = np.sum(post_H2_flat * W_H2toO[:, i])
-post_O = activation(pre_O)
+post_O = sigmoid(pre_O)
 print(post_O)
